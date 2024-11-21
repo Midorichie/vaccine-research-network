@@ -1,0 +1,26 @@
+[project]
+name = "vaccine-research-network"
+requirements = []
+boot-path = "./boot"
+
+[contracts.research-token-trait]
+path = "contracts/research-token-trait.clar"
+depends-on = []
+
+[contracts.research-token]
+path = "contracts/research-token.clar"
+depends-on = ["research-token-trait"]
+
+[contracts.vaccine-research-network]
+path = "contracts/vaccine-research-network.clar"
+depends-on = [
+    "research-token", 
+    "research-token-trait"
+]
+
+[repl]
+cost_model = "dev"
+parser = "v2"
+
+[repl.analysis]
+passes = ["check-conservative"]
