@@ -1,13 +1,18 @@
-;; Decentralized Vaccine Development Network
-;; Primary Contract: Genome Data Sharing Platform
+;; Decentralized Vaccine Development Network V2
+;; Advanced Genome Research Collaboration Platform
 
-(define-constant contract-owner tx-sender)
-(define-constant err-unauthorized (err u100))
-(define-constant err-invalid-submission (err u101))
-(define-constant err-already-exists (err u102))
-(define-constant err-not-found (err u103))
+(use-trait research-token-trait .research-token-trait.research-token)
 
-;; Data Structures
+;; Extended Error Handling
+(define-constant ERR-BASE u1000)
+(define-constant ERR-UNAUTHORIZED (+ ERR-BASE u1))
+(define-constant ERR-INVALID-SUBMISSION (+ ERR-BASE u2))
+(define-constant ERR-ALREADY-EXISTS (+ ERR-BASE u3))
+(define-constant ERR-INSUFFICIENT-FUNDS (+ ERR-BASE u4))
+(define-constant ERR-RESEARCH-TOKEN-INVALID (+ ERR-BASE u5))
+(define-constant ERR-DATA-INTEGRITY-FAILED (+ ERR-BASE u6))
+
+;; Enhanced Data Structures
 (define-map research-submissions
     { 
         researcher: principal,
@@ -17,74 +22,126 @@
         submission-timestamp: uint,
         data-hash: (string-ascii 64),
         research-institution: (string-ascii 100),
-        genome-type: (string-ascii 50)
+        genome-type: (string-ascii 50),
+        research-score: uint,
+        validation-status: (string-ascii 20)
     }
 )
 
-(define-map researcher-permissions
+;; Collaborative Reputation System
+(define-map researcher-profile
     principal
     {
-        is-verified: bool,
-        access-level: (string-ascii 20)
+        total-submissions: uint,
+        cumulative-research-score: uint,
+        verified-institutions: (list 5 (string-ascii 100)),
+        access-level: (string-ascii 20),
+        last-submission-timestamp: uint
     }
 )
 
-;; Access Control Mechanism
-(define-read-only (is-researcher-authorized (researcher principal))
+;; Governance and Validation Mechanism
+(define-map validation-committee
+    principal
+    {
+        is-validator: bool,
+        validation-power: uint
+    }
+)
+
+;; Advanced Access Control
+(define-read-only (get-researcher-profile (researcher principal))
     (default-to 
-        { is-verified: false, access-level: "none" }
-        (map-get? researcher-permissions researcher)
+        {
+            total-submissions: u0,
+            cumulative-research-score: u0,
+            verified-institutions: (list),
+            access-level: "basic",
+            last-submission-timestamp: u0
+        }
+        (map-get? researcher-profile researcher)
     )
 )
 
-;; Core Functions
-(define-public (register-researcher 
+;; Comprehensive Researcher Registration
+(define-public (register-researcher
     (institution (string-ascii 100))
-    (access-level (string-ascii 20))
+    (research-token <research-token-trait>)
 )
-    (begin
-        ;; Only contract owner can register researchers initially
-        (asserts! (is-eq tx-sender contract-owner) err-unauthorized)
-        
-        (map-set researcher-permissions 
-            tx-sender 
-            {
-                is-verified: true, 
-                access-level: access-level
-            }
+    (let 
+        (
+            (current-profile (get-researcher-profile tx-sender))
+            (token-balance (unwrap! 
+                (contract-call? research-token get-balance tx-sender) 
+                (err ERR-RESEARCH-TOKEN-INVALID)
+            ))
         )
+        ;; Advanced registration criteria
+        (asserts! (> token-balance u100) (err ERR-INSUFFICIENT-FUNDS))
+        
+        (map-set researcher-profile 
+            tx-sender 
+            (merge current-profile {
+                verified-institutions: (unwrap! 
+                    (as-max-len? 
+                        (append 
+                            (get verified-institutions current-profile) 
+                            institution
+                        ) 
+                    u5)
+                    (err ERR-INVALID-SUBMISSION)
+                ),
+                access-level: (if (> token-balance u1000) "advanced" "basic")
+            })
+        )
+        
         (ok true)
     )
 )
 
+;; Enhanced Genome Data Submission
 (define-public (submit-genome-data
     (genome-id (string-ascii 50))
     (data-hash (string-ascii 64))
     (genome-type (string-ascii 50))
+    (research-token <research-token-trait>)
 )
     (let 
         (
-            (researcher-info (is-researcher-authorized tx-sender))
+            (researcher-profile (get-researcher-profile tx-sender))
             (submission-timestamp block-height)
-        )
-        
-        ;; Validate researcher authorization
-        (asserts! (get is-verified researcher-info) err-unauthorized)
-        
-        ;; Prevent duplicate submissions
-        (asserts! 
-            (is-none 
-                (map-get? research-submissions 
-                    {
-                        researcher: tx-sender, 
-                        genome-id: genome-id
-                    }
+            (token-balance (unwrap! 
+                (contract-call? research-token get-balance tx-sender) 
+                (err ERR-RESEARCH-TOKEN-INVALID)
+            ))
+            
+            ;; Calculate research score based on token balance and submission history
+            (research-score 
+                (+ 
+                    (/ token-balance u10)
+                    (get total-submissions researcher-profile)
                 )
-            ) 
-            err-already-exists
+            )
         )
         
-        ;; Record genome submission
+        ;; Comprehensive Validation Checks
+        (asserts! 
+            (and 
+                (> (len genome-id) u10)
+                (> (len data-hash) u30)
+            )
+            (err ERR-INVALID-SUBMISSION)
+        )
+        
+        ;; Prevent rapid successive submissions
+        (asserts! 
+            (> submission-timestamp 
+               (+ (get last-submission-timestamp researcher-profile) u100)
+            )
+            (err ERR-INVALID-SUBMISSION)
+        )
+        
+        ;; Record genome submission with enhanced metadata
         (map-set research-submissions
             {
                 researcher: tx-sender,
@@ -93,8 +150,48 @@
             {
                 submission-timestamp: submission-timestamp,
                 data-hash: data-hash,
-                research-institution: "Default Institution",  ;; To be updated in v2
-                genome-type: genome-type
+                research-institution: (unwrap-panic 
+                    (element-at 
+                        (get verified-institutions researcher-profile) 
+                        u0
+                    )
+                ),
+                genome-type: genome-type,
+                research-score: research-score,
+                validation-status: "pending"
+            }
+        )
+        
+        ;; Update researcher profile
+        (map-set researcher-profile 
+            tx-sender
+            (merge researcher-profile {
+                total-submissions: (+ (get total-submissions researcher-profile) u1),
+                cumulative-research-score: (+ 
+                    (get cumulative-research-score researcher-profile) 
+                    research-score
+                ),
+                last-submission-timestamp: submission-timestamp
+            })
+        )
+        
+        (ok research-score)
+    )
+)
+
+;; Validation Committee Management
+(define-public (add-validator 
+    (validator principal)
+    (validation-power uint)
+)
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) (err ERR-UNAUTHORIZED))
+        
+        (map-set validation-committee 
+            validator 
+            { 
+                is-validator: true, 
+                validation-power: validation-power 
             }
         )
         
@@ -102,47 +199,54 @@
     )
 )
 
-;; Read-only Functions for Data Retrieval
-(define-read-only (get-genome-submission 
+;; Advanced Data Validation Mechanism
+(define-public (validate-genome-submission
     (researcher principal)
     (genome-id (string-ascii 50))
+    (validation-result bool)
 )
-    (map-get? research-submissions 
-        {
-            researcher: researcher, 
-            genome-id: genome-id
-        }
-    )
-)
-
-;; Governance and Management Functions
-(define-public (update-researcher-access
-    (researcher principal)
-    (new-access-level (string-ascii 20))
-)
-    (begin
-        ;; Restrict access to contract owner
-        (asserts! (is-eq tx-sender contract-owner) err-unauthorized)
+    (let 
+        (
+            (validator-info (default-to 
+                { is-validator: false, validation-power: u0 }
+                (map-get? validation-committee tx-sender)
+            ))
+            (current-submission (unwrap! 
+                (map-get? research-submissions 
+                    { 
+                        researcher: researcher, 
+                        genome-id: genome-id 
+                    }
+                )
+                (err ERR-NOT-FOUND)
+            ))
+        )
         
-        (map-set researcher-permissions
-            researcher
-            {
-                is-verified: true,
-                access-level: new-access-level
+        ;; Validate only by approved committee members
+        (asserts! (get is-validator validator-info) (err ERR-UNAUTHORIZED))
+        
+        ;; Update submission status based on validation
+        (map-set research-submissions
+            { 
+                researcher: researcher, 
+                genome-id: genome-id 
             }
+            (merge current-submission {
+                validation-status: (if validation-result "validated" "rejected")
+            })
         )
         
         (ok true)
     )
 )
 
-;; Initialization Function
-(define-private (initialize-contract)
+;; Initialization and Upgrade Hook
+(define-private (initialize-v2)
     (begin
-        ;; Initial setup can be expanded in future versions
+        ;; Potential migration or upgrade logic
         (ok true)
     )
 )
 
-;; Contract Initialization
-(initialize-contract)
+;; Initialize V2 on contract deployment
+(initialize-v2)
